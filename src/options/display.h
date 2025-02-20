@@ -2,15 +2,16 @@
 
 #include "util/FFstrbuf.h"
 
-typedef enum FFBinaryPrefixType
+typedef enum __attribute__((__packed__)) FFSizeBinaryPrefixType
 {
-    FF_BINARY_PREFIX_TYPE_IEC,   // 1024 Bytes = 1 KiB, 1024 KiB = 1 MiB, ... (standard)
-    FF_BINARY_PREFIX_TYPE_SI,    // 1000 Bytes = 1 KB, 1000 KB = 1 MB, ...
-    FF_BINARY_PREFIX_TYPE_JEDEC, // 1024 Bytes = 1 kB, 1024 kB = 1 MB, ...
-} FFBinaryPrefixType;
+    FF_SIZE_BINARY_PREFIX_TYPE_IEC,   // 1024 Bytes = 1 KiB, 1024 KiB = 1 MiB, ... (standard)
+    FF_SIZE_BINARY_PREFIX_TYPE_SI,    // 1000 Bytes = 1 KB, 1000 KB = 1 MB, ...
+    FF_SIZE_BINARY_PREFIX_TYPE_JEDEC, // 1024 Bytes = 1 kB, 1024 kB = 1 MB, ...
+} FFSizeBinaryPrefixType;
 
-typedef enum FFTemperatureUnit
+typedef enum __attribute__((__packed__)) FFTemperatureUnit
 {
+    FF_TEMPERATURE_UNIT_DEFAULT,
     FF_TEMPERATURE_UNIT_CELSIUS,
     FF_TEMPERATURE_UNIT_FAHRENHEIT,
     FF_TEMPERATURE_UNIT_KELVIN,
@@ -22,17 +23,18 @@ typedef struct FFOptionsDisplay
     FFstrbuf colorKeys;
     FFstrbuf colorTitle;
     FFstrbuf colorOutput;
+    FFstrbuf colorSeparator;
 
     bool brightColor;
 
     FFstrbuf keyValueSeparator;
 
-    bool stat;
+    int32_t stat; // <0: disable stat; 0: no threshold; >0: threshold in ms
     bool pipe; //disables all escape sequences
     bool showErrors;
     bool disableLinewrap;
     bool hideCursor;
-    FFBinaryPrefixType binaryPrefixType;
+    FFSizeBinaryPrefixType sizeBinaryPrefix;
     uint8_t sizeNdigits;
     uint8_t sizeMaxPrefix;
     FFTemperatureUnit tempUnit;
@@ -42,16 +44,20 @@ typedef struct FFOptionsDisplay
     FFstrbuf tempColorRed;
     FFstrbuf barCharElapsed;
     FFstrbuf barCharTotal;
+    FFstrbuf barBorderLeft;
+    FFstrbuf barBorderRight;
     uint8_t barWidth;
-    bool barBorder;
-    uint8_t percentType;
+    FFPercentageTypeFlags percentType;
     uint8_t percentNdigits;
     FFstrbuf percentColorGreen;
     FFstrbuf percentColorYellow;
     FFstrbuf percentColorRed;
     bool noBuffer;
-    uint32_t keyWidth;
-    bool tsVersion;
+    FFModuleKeyType keyType;
+    uint16_t keyWidth;
+    uint16_t keyPaddingLeft;
+    int8_t freqNdigits;
+    FFlist constants; // list of FFstrbuf
 } FFOptionsDisplay;
 
 const char* ffOptionsParseDisplayJsonConfig(FFOptionsDisplay* options, yyjson_val* root);

@@ -8,6 +8,7 @@
 #include "detection/displayserver/displayserver.h"
 #include "util/mallocHelper.h"
 #include "util/stringUtils.h"
+#include "util/binary.h"
 
 static const char* getSystemMonospaceFont(void)
 {
@@ -39,6 +40,26 @@ static void detectKgx(FFTerminalFontResult* terminalFont)
             ffFontInitPango(&terminalFont->font, fontName);
         else
             ffStrbufAppendF(&terminalFont->error, "Couldn't get terminal font from GSettings (org.gnome.Console::custom-font)");
+    }
+    else
+    {
+        FF_AUTO_FREE const char* fontName = getSystemMonospaceFont();
+        if(ffStrSet(fontName))
+            ffFontInitPango(&terminalFont->font, fontName);
+        else
+            ffStrbufAppendS(&terminalFont->error, "Couldn't get system monospace font name from GSettings / DConf");
+    }
+}
+
+static void detectPtyxis(FFTerminalFontResult* terminalFont)
+{
+    if(!ffSettingsGet("/org/gnome/Ptyxis/use-system-font", "org.gnome.Ptyxis", NULL, "use-system-font", FF_VARIANT_TYPE_BOOL).boolValue)
+    {
+        FF_AUTO_FREE const char* fontName = ffSettingsGet("/org/gnome/Ptyxis/font-name", "org.gnome.Ptyxis", NULL, "font-name", FF_VARIANT_TYPE_STRING).strValue;
+        if(ffStrSet(fontName))
+            ffFontInitPango(&terminalFont->font, fontName);
+        else
+            ffStrbufAppendF(&terminalFont->error, "Couldn't get terminal font from GSettings (org.gnome.Ptyxis::font-name)");
     }
     else
     {
@@ -223,13 +244,19 @@ static void detectFootTerminal(FFTerminalFontResult* terminalFont)
         return;
     }
     uint32_t equal = ffStrbufNextIndexS(&font, colon, "size=");
-    font.chars[colon] = 0;
+    font.chars[colon] = '\0';
     if (equal == font.length)
     {
         ffFontInitValues(&terminalFont->font, font.chars, "8");
         return;
     }
-    ffFontInitValues(&terminalFont->font, font.chars, &font.chars[equal + strlen("size=")]);
+    uint32_t size = equal + (uint32_t) strlen("size=");
+    uint32_t comma = ffStrbufNextIndexC(&font, size, ',');
+    if (comma < font.length)
+        font.chars[comma] = '\0';
+    ffFontInitValues(&terminalFont->font, font.chars, &font.chars[size]);
+    if (comma < font.length)
+        ffFontInitValues(&terminalFont->fallback, &font.chars[comma + 1], NULL);
 }
 
 static void detectQTerminal(FFTerminalFontResult* terminalFont)
@@ -266,6 +293,13 @@ static void detectXterm(FFTerminalFontResult* terminalFont)
     ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
 }
 
+static bool extractStTermFont(const char* str, FF_MAYBE_UNUSED uint32_t len, void* userdata)
+{
+    if (!ffStrContains(str, "size=")) return true;
+    ffStrbufSetNS((FFstrbuf*) userdata, len, str);
+    return false;
+}
+
 static void detectSt(FFTerminalFontResult* terminalFont, const FFTerminalResult* terminal)
 {
     FF_STRBUF_AUTO_DESTROY size = ffStrbufCreateF("/proc/%u/cmdline", terminal->pid);
@@ -286,30 +320,18 @@ static void detectSt(FFTerminalFontResult* terminalFont, const FFTerminalResult*
     else
     {
         ffStrbufClear(&font);
-        if (ffProcessAppendStdOut(&font, (char* const[]) {
-            "strings",
-            terminal->exePath.chars,
-            NULL,
-        }) != NULL || font.length == 0)
+
+        const char* error = ffBinaryExtractStrings(terminal->exePath.chars, extractStTermFont, &font, (uint32_t) strlen("size=0"));
+        if (error)
         {
-            ffStrbufAppendS(&terminalFont->error, "Failed to run `strings st`");
+            ffStrbufAppendS(&terminalFont->error, error);
             return;
         }
-
-        // Search font config string in st binary
-        uint32_t middleIndex = ffStrbufFirstIndexS(&font, "size=");
-        if (middleIndex == font.length)
+        if (font.length == 0)
         {
             ffStrbufAppendS(&terminalFont->error, "No font config found in st binary");
             return;
         }
-
-        uint32_t startIndex = ffStrbufPreviousIndexC(&font, middleIndex, '\n');
-        if (startIndex == font.length) startIndex = 0;
-        uint32_t endIndex = ffStrbufNextIndexC(&font, middleIndex, '\n');
-
-        ffStrbufSubstrBefore(&font, endIndex);
-        ffStrbufSubstrAfter(&font, startIndex);
     }
 
     // JetBrainsMono Nerd Font Mono:pixelsize=12:antialias=true:autohint=true
@@ -320,7 +342,7 @@ static void detectSt(FFTerminalFontResult* terminalFont, const FFTerminalResult*
         uint32_t sIndex = ffStrbufNextIndexS(&font, index + 1, "size=");
         if (sIndex != font.length)
         {
-            sIndex += strlen("size=");
+            sIndex += (uint32_t) strlen("size=");
             uint32_t sIndexEnd = ffStrbufNextIndexC(&font, sIndex, ':');
             ffStrbufSetNS(&size, sIndexEnd - sIndex, font.chars + sIndex);
         }
@@ -359,6 +381,30 @@ static void detectWarp(FFTerminalFontResult* terminalFont)
     }
 }
 
+static void detectTerminator(FFTerminalFontResult* result)
+{
+    FF_STRBUF_AUTO_DESTROY useSystemFont = ffStrbufCreate();
+    FF_STRBUF_AUTO_DESTROY fontName = ffStrbufCreate();
+
+    if(!ffParsePropFileConfigValues("terminator/config", 2, (FFpropquery[]) {
+        {"use_system_font =", &useSystemFont},
+        {"font =", &fontName},
+    }) || ffStrbufIgnCaseEqualS(&useSystemFont, "True"))
+    {
+        FF_AUTO_FREE const char* fontName = getSystemMonospaceFont();
+        if(ffStrSet(fontName))
+            ffFontInitPango(&result->font, fontName);
+        else
+            ffStrbufAppendS(&result->error, "Couldn't get system monospace font name from GSettings / DConf");
+        return;
+    }
+
+    if(fontName.length == 0)
+        ffFontInitValues(&result->font, "Mono", "10");
+    else
+        ffFontInitPango(&result->font, fontName.chars);
+}
+
 static void detectWestonTerminal(FFTerminalFontResult* terminalFont)
 {
     FF_STRBUF_AUTO_DESTROY font = ffStrbufCreate();
@@ -371,6 +417,21 @@ static void detectWestonTerminal(FFTerminalFontResult* terminalFont)
     if (!size.length) ffStrbufSetStatic(&size, "14");
     ffFontInitValues(&terminalFont->font, font.chars, size.chars);
 }
+
+#ifdef __HAIKU__
+static void detectHaikuTerminal(FFTerminalFontResult* terminalFont)
+{
+    FF_STRBUF_AUTO_DESTROY font = ffStrbufCreate();
+    FF_STRBUF_AUTO_DESTROY size = ffStrbufCreate();
+    ffParsePropFileConfigValues("Terminal/Default", 2, (FFpropquery[]) {
+        {"\"Half Font Family\" , ", &font},
+        {"\"Half Font Size\" , ", &size},
+    });
+    if (!font.length) ffStrbufSetStatic(&font, "Noto Sans Mono");
+    if (!size.length) ffStrbufSetStatic(&size, "12");
+    ffFontInitValues(&terminalFont->font, font.chars, size.chars);
+}
+#endif
 
 void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFontResult* terminalFont)
 {
@@ -386,6 +447,8 @@ void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFo
         detectFromGSettings("/com/gexperts/Tilix/profiles/", "com.gexperts.Tilix.ProfilesList", "com.gexperts.Tilix.Profile", "default", terminalFont);
     else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "gnome-terminal"))
         detectFromGSettings("/org/gnome/terminal/legacy/profiles:/:", "org.gnome.Terminal.ProfilesList", "org.gnome.Terminal.Legacy.Profile", "default", terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "ptyxis-agent"))
+        detectPtyxis(terminalFont);
     else if(ffStrbufIgnCaseEqualS(&terminal->processName, "kgx"))
         detectKgx(terminalFont);
     else if(ffStrbufIgnCaseEqualS(&terminal->processName, "mate-terminal"))
@@ -404,4 +467,12 @@ void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFo
         detectWarp(terminalFont);
     else if(ffStrbufIgnCaseEqualS(&terminal->processName, "weston-terminal"))
         detectWestonTerminal(terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "terminator"))
+        detectTerminator(terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "sakura"))
+        detectFromConfigFile("sakura/sakura.conf", "font=", terminalFont);
+    #ifdef __HAIKU__
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "Terminal"))
+        detectHaikuTerminal(terminalFont);
+    #endif
 }

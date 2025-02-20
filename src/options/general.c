@@ -1,5 +1,6 @@
 #include "fastfetch.h"
 #include "common/jsonconfig.h"
+#include "common/processing.h"
 #include "options/general.h"
 #include "util/stringUtils.h"
 
@@ -21,10 +22,15 @@ const char* ffOptionsParseGeneralJsonConfig(FFOptionsGeneral* options, yyjson_va
             options->multithreading = yyjson_get_bool(val);
         else if (ffStrEqualsIgnCase(key, "processingTimeout"))
             options->processingTimeout = (int32_t) yyjson_get_int(val);
+        else if (ffStrEqualsIgnCase(key, "preRun"))
+        {
+            if (system(yyjson_get_str(val)) < 0)
+                return "Failed to execute preRun command";
+        }
+        else if (ffStrEqualsIgnCase(key, "detectVersion"))
+            options->detectVersion = yyjson_get_bool(val);
 
-        #if defined(__linux__) || defined(__FreeBSD__)
-        else if (ffStrEqualsIgnCase(key, "escapeBedrock"))
-            options->escapeBedrock = yyjson_get_bool(val);
+        #if defined(__linux__) || defined(__FreeBSD__) || defined(__sun) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
         else if (ffStrEqualsIgnCase(key, "playerName"))
             ffStrbufSetS(&options->playerName, yyjson_get_str(val));
         else if (ffStrEqualsIgnCase(key, "dsForceDrm"))
@@ -51,13 +57,6 @@ const char* ffOptionsParseGeneralJsonConfig(FFOptionsGeneral* options, yyjson_va
             options->wmiTimeout = (int32_t) yyjson_get_int(val);
         #endif
 
-        else if (ffStrEqualsIgnCase(key, "stat"))
-            return "Property `general.stat` has been changed to `display.stat`";
-        else if (ffStrEqualsIgnCase(key, "pipe"))
-            return "Property `general.pipe` has been changed to `display.pipe`";
-        else if (ffStrEqualsIgnCase(key, "allowSlowOperations"))
-            return "Property `general.allowSlowOperations` has been obsoleted. See CHANGELOG for detail";
-
         else
             return "Unknown general property";
     }
@@ -71,10 +70,10 @@ bool ffOptionsParseGeneralCommandLine(FFOptionsGeneral* options, const char* key
         options->multithreading = ffOptionParseBoolean(value);
     else if(ffStrEqualsIgnCase(key, "--processing-timeout"))
         options->processingTimeout = ffOptionParseInt32(key, value);
+    else if(ffStrEqualsIgnCase(key, "--detect-version"))
+        options->detectVersion = ffOptionParseBoolean(value);
 
-    #if defined(__linux__) || defined(__FreeBSD__)
-    else if(ffStrEqualsIgnCase(key, "--escape-bedrock"))
-        options->escapeBedrock = ffOptionParseBoolean(value);
+    #if defined(__linux__) || defined(__FreeBSD__) || defined(__sun) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
     else if(ffStrEqualsIgnCase(key, "--player-name"))
         ffOptionParseString(key, value, &options->playerName);
     else if(ffStrEqualsIgnCase(key, "--ds-force-drm"))
@@ -99,11 +98,11 @@ bool ffOptionsParseGeneralCommandLine(FFOptionsGeneral* options, const char* key
 
 void ffOptionsInitGeneral(FFOptionsGeneral* options)
 {
-    options->processingTimeout = 1000;
+    options->processingTimeout = 5000;
     options->multithreading = true;
+    options->detectVersion = true;
 
-    #if defined(__linux__) || defined(__FreeBSD__)
-    options->escapeBedrock = true;
+    #if defined(__linux__) || defined(__FreeBSD__) || defined(__sun) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
     ffStrbufInit(&options->playerName);
     options->dsForceDrm = FF_DS_FORCE_DRM_TYPE_FALSE;
     #elif defined(_WIN32)
@@ -113,7 +112,7 @@ void ffOptionsInitGeneral(FFOptionsGeneral* options)
 
 void ffOptionsDestroyGeneral(FF_MAYBE_UNUSED FFOptionsGeneral* options)
 {
-    #if defined(__linux__) || defined(__FreeBSD__)
+    #if defined(__linux__) || defined(__FreeBSD__) || defined(__sun) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
     ffStrbufDestroy(&options->playerName);
     #endif
 }
@@ -131,10 +130,7 @@ void ffOptionsGenerateGeneralJsonConfig(FFOptionsGeneral* options, yyjson_mut_do
     if (options->processingTimeout != defaultOptions.processingTimeout)
         yyjson_mut_obj_add_int(doc, obj, "processingTimeout", options->processingTimeout);
 
-    #if defined(__linux__) || defined(__FreeBSD__)
-
-    if (options->escapeBedrock != defaultOptions.escapeBedrock)
-        yyjson_mut_obj_add_bool(doc, obj, "escapeBedrock", options->escapeBedrock);
+    #if defined(__linux__) || defined(__FreeBSD__) || defined(__sun) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__HAIKU__)
 
     if (!ffStrbufEqual(&options->playerName, &defaultOptions.playerName))
         yyjson_mut_obj_add_strbuf(doc, obj, "playerName", &options->playerName);
